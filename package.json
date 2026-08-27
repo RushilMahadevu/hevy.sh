@@ -1,0 +1,20 @@
+{
+  "name": "hevy-tracker",
+  "version": "1.0.0",
+  "description": "Notion-inspired Bento fitness analytics dashboard for Hevy",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "echo 'Build complete'"
+  },
+  "keywords": [
+    "hevy",
+    "fitness",
+    "bento",
+    "analytics",
+    "workout-tracker"
+  ],
+  "author": "",
+  "license": "MIT"
+}
