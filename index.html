@@ -452,7 +452,7 @@
     .ex-hist-item:last-child { border-bottom: none; }
     .ex-hist-date  { color: var(--fg2); white-space: nowrap; flex-shrink: 0; min-width: 64px; }
     .ex-hist-sets  { color: var(--fg3); flex: 1; font-variant-numeric: tabular-nums; }
-    .ex-hist-orm   { font-weight: 600; color: var(--hi); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; min-width: 72px; text-align: right; }
+    .ex-hist-orm   { font-weight: 600; color: var(--hi2); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; min-width: 96px; text-align: right; }
     .ex-hist-delta { font-size: 10px; font-weight: 600; padding: 2px 5px; border: 1px solid; white-space: nowrap; flex-shrink: 0; }
     .ex-hist-delta.pos { color: var(--hi2); border-color: var(--hi2); background: rgba(52,211,153,.07); }
     .ex-hist-delta.neg { color: var(--hi5); border-color: var(--hi5); background: rgba(251,113,133,.07); }
@@ -853,8 +853,8 @@
     </div>
     <div class="cell w3">
       <div class="cell-hdr">
-        <div class="lbl"><svg data-lucide="bar-chart-2"></svg>Strength Percentiles</div>
-        <span class="tag">BW-adjusted · Symmetric Strength norms</span>
+        <div class="lbl"><svg data-lucide="bar-chart-2"></svg>Strength Standards (Est. 1RM)</div>
+        <span class="tag">Estimated · Symmetric Strength norms</span>
       </div>
       <div class="pct-list" id="pct"></div>
     </div>
@@ -920,8 +920,14 @@
   <div class="row">
     <div class="cell w2 bare">
       <div class="cell-hdr" style="padding:14px 18px;">
-        <div class="lbl"><svg data-lucide="medal"></svg>PR Leaderboard &amp; Est. 1RM</div>
-        <span class="tag">Epley formula</span>
+        <div class="lbl"><svg data-lucide="medal"></svg>Personal Records (Top Sets)</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div class="split-grp" id="pr-view-grp">
+            <button class="split-btn on" id="pr-v-top" onclick="setPrView('top')">Top Sets</button>
+            <button class="split-btn" id="pr-v-orm" onclick="setPrView('orm')">Est. 1RM</button>
+          </div>
+          <span class="tag" id="pr-view-tag">Heaviest working sets</span>
+        </div>
       </div>
       <div class="pr-tbl-wrap">
         <table class="pr-tbl" id="pr-tbl"></table>
@@ -1071,6 +1077,7 @@ let unit      = localStorage.getItem('hv_unit')  || 'lbs';
 let theme     = localStorage.getItem('hv_theme') || 'dark';
 let splitMode = localStorage.getItem('hv_split') || 'ppl';
 let bodyColorMode = localStorage.getItem('hv_body_color_mode') || 'heatmap';
+let prView    = localStorage.getItem('hv_pr_view') || 'top';
 let progFilter = 'all';
 let gainersExpanded = false;
 let workouts  = [], bw = [];
@@ -1145,9 +1152,31 @@ const EX = {
 /* ── UTILS ────────────────────────────────────── */
 const toLbs = kg => kg * 2.20462262;
 const fmtW  = (kg, u=unit) => !kg ? '0' : u==='lbs' ? Math.round(toLbs(kg))+' lbs' : (Math.round(kg*10)/10)+' kg';
-const epley = (w,r) => !w||!r ? 0 : r===1 ? w : w*(1+r/30);
+// Capped effective reps at 10 for realistic 1RM estimates (exercise science standard)
+const epley = (w,r) => !w||!r ? 0 : r===1 ? w : w*(1 + Math.min(r, 10)/30);
 const fmtD  = (s,r) => Math.floor(s/3600)?Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m':Math.floor(s/60)+'m';
 const fmtDate = iso => new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+
+function isBetterSet(a, b) {
+  if (!b) return true;
+  if (!a) return false;
+  const aW = a.weight_kg !== undefined ? a.weight_kg : (a.wKg || 0);
+  const bW = b.weight_kg !== undefined ? b.weight_kg : (b.wKg || 0);
+  const aR = a.reps || 0;
+  const bR = b.reps || 0;
+  if (aW > 0 || bW > 0) {
+    if (aW !== bW) return aW > bW;
+    return aR > bR;
+  }
+  return aR > bR;
+}
+
+function getTopSet(sets) {
+  const working = (sets || []).filter(s => s.type !== 'warmup');
+  const target = working.length ? working : (sets || []);
+  if (!target.length) return null;
+  return target.reduce((best, s) => isBetterSet(s, best) ? s : best, null);
+}
 
 /* ── THEME ──────────────────────────────────── */
 function initTheme() {
@@ -1306,21 +1335,24 @@ function renderPCT() {
     });
   });
   const lifts = [
-    {name:'Smith Squat',         key:'Squat (Smith Machine)',         ratios:[.8,1.2,1.6,2.0,2.4]},
-    {name:'Barbell Bench',       key:'Bench Press (Barbell)',         ratios:[.65,.95,1.25,1.6,1.95]},
-    {name:'Romanian Deadlift',   key:'Romanian Deadlift (Barbell)',   ratios:[.75,1.15,1.55,1.95,2.35]},
-    {name:'Pull-Ups',            key:'Pull Up',                       isReps:true},
-    {name:'Dumbbell Shoulder',   key:'Shoulder Press (Dumbbell)',     ratios:[.35,.55,.75,1.0,1.25]},
-    {name:'Dumbbell Curl',       key:'Bicep Curl (Dumbbell)',         ratios:[.25,.38,.52,.68,.85]}
+    {name:'Squat',               keys:['Squat (Barbell)','Squat (Smith Machine)'], ratios:[.8,1.2,1.6,2.0,2.4]},
+    {name:'Barbell Bench',       keys:['Bench Press (Barbell)','Bench Press (Smith Machine)'], ratios:[.65,.95,1.25,1.6,1.95]},
+    {name:'Romanian Deadlift',   keys:['Romanian Deadlift (Barbell)'], ratios:[.75,1.15,1.55,1.95,2.35]},
+    {name:'Pull-Ups',            keys:['Pull Up'],                     isReps:true},
+    {name:'Dumbbell Shoulder',   keys:['Shoulder Press (Dumbbell)'],   ratios:[.35,.55,.75,1.0,1.25]},
+    {name:'Dumbbell Curl',       keys:['Bicep Curl (Dumbbell)'],       ratios:[.25,.38,.52,.68,.85]}
   ];
   const c = document.getElementById('pct');
   c.innerHTML = '';
   lifts.forEach(lift => {
-    const d = best[lift.key]||{wKg:0,reps:0,orm:0};
+    let d = {wKg:0,reps:0,orm:0};
+    for (const k of lift.keys) {
+      if (best[k] && (!d.orm || best[k].orm > d.orm)) d = best[k];
+    }
     let pct=50,tierCls='t-int',tierTxt='Intermediate',display='',ratio='';
     if (lift.isReps) {
       const maxR = Math.max(...(workouts.flatMap(w =>
-        (w.exercises||[]).filter(e=>e.title===lift.key).flatMap(e=>(e.sets||[]).map(s=>s.reps||0))
+        (w.exercises||[]).filter(e=>lift.keys.includes(e.title)).flatMap(e=>(e.sets||[]).map(s=>s.reps||0))
       ).filter(Boolean)), 0) || 7;
       display = maxR+' reps'; ratio = 'BW '+fmtW(bwKg);
       if(maxR>=15){pct=92;tierCls='t-adv';tierTxt='Advanced';}
@@ -1328,7 +1360,7 @@ function renderPCT() {
       else if(maxR>=5){pct=55;tierCls='t-int';tierTxt='Intermediate';}
       else{pct=33;tierCls='t-nov';tierTxt='Novice';}
     } else {
-      const orm = d.orm||(lift.key.includes('Squat')?106:70);
+      const orm = d.orm||(lift.name.includes('Squat')?106:70);
       const r = orm/bwKg;
       display = 'Est. 1RM: '+fmtW(orm);
       ratio = r.toFixed(2)+'× BW';
@@ -1571,37 +1603,95 @@ function renderMuscleModel(vol, total) {
 }
 
 /* ── PR TABLE ─────────────────────────────────── */
+function setPrView(view) {
+  prView = view;
+  localStorage.setItem('hv_pr_view', view);
+  const btnTop = document.getElementById('pr-v-top');
+  const btnOrm = document.getElementById('pr-v-orm');
+  const tag = document.getElementById('pr-view-tag');
+  if (btnTop && btnOrm) {
+    btnTop.classList.toggle('on', view === 'top');
+    btnOrm.classList.toggle('on', view === 'orm');
+  }
+  if (tag) {
+    tag.textContent = view === 'top' ? 'Heaviest working sets' : 'Estimated 1RM (capped)';
+  }
+  renderPR();
+}
+
 function renderPR() {
   const rec = {};
   workouts.forEach(w => {
     (w.exercises||[]).forEach(ex => {
-      (ex.sets||[]).forEach(s => {
-        const orm = epley(s.weight_kg||0, s.reps||0);
-        if (!rec[ex.title]||orm>rec[ex.title].orm)
-          rec[ex.title]={title:ex.title,wKg:s.weight_kg||0,reps:s.reps||0,orm,date:w.start_time};
-      });
+      const ts = getTopSet(ex.sets);
+      if (!ts) return;
+      const orm = epley(ts.weight_kg||0, ts.reps||0);
+      const cur = {
+        title: ex.title,
+        weight_kg: ts.weight_kg||0,
+        wKg: ts.weight_kg||0,
+        reps: ts.reps||0,
+        orm,
+        date: w.start_time
+      };
+      if (!rec[ex.title] || isBetterSet(ts, rec[ex.title])) {
+        rec[ex.title] = cur;
+      }
     });
   });
-  const rows = Object.values(rec).sort((a,b)=>b.orm-a.orm).slice(0,12);
+
   const t = document.getElementById('pr-tbl');
-  t.innerHTML =
-    '<thead><tr>'+
-      '<th>Exercise</th><th>Top Set</th><th>Reps</th><th>Est. 1RM</th><th>Muscle</th>'+
-    '</tr></thead>'+
-    '<tbody>'+rows.map(r=>{
-      const m = EX[r.title]?.p||'Other';
-      const color = MCOL[m]||'#888';
-      return '<tr>'+
-        '<td><div class="pr-ex" onclick="openExModal(\''+r.title.replace(/'/g,"\\'")+'\''+')" style="cursor:pointer;"><svg data-lucide="dumbbell"></svg>'+r.title+'</div></td>'+
-        '<td>'+(r.wKg>0?fmtW(r.wKg):'BW')+'</td>'+
-        '<td>'+r.reps+'</td>'+
-        '<td style="color:var(--hi);font-weight:600">'+(r.orm>0?fmtW(r.orm):'—')+'</td>'+
-        '<td><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--fg3)">'+
-          '<span style="width:6px;height:6px;border-radius:50%;background:'+color+';display:inline-block"></span>'+m+
-        '</span></td>'+
-      '</tr>';
-    }).join('')+
-    '</tbody>';
+  if (!t) return;
+
+  if (prView === 'top') {
+    // Top Sets view: sorted by heaviest weight, then reps
+    const rows = Object.values(rec).sort((a,b) => {
+      if (b.wKg !== a.wKg) return b.wKg - a.wKg;
+      return b.reps - a.reps;
+    }).slice(0, 12);
+
+    t.innerHTML =
+      '<thead><tr>'+
+        '<th>Exercise</th><th>Top Set</th><th>Reps</th><th>Date</th><th>Muscle</th>'+
+      '</tr></thead>'+
+      '<tbody>'+rows.map(r=>{
+        const m = EX[r.title]?.p||'Other';
+        const color = MCOL[m]||'#888';
+        const topSetDisplay = r.wKg > 0 ? fmtW(r.wKg) : 'BW';
+        return '<tr>'+
+          '<td><div class="pr-ex" onclick="openExModal(\''+r.title.replace(/'/g,"\\'")+'\''+')" style="cursor:pointer;"><svg data-lucide="dumbbell"></svg>'+r.title+'</div></td>'+
+          '<td style="color:var(--hi2);font-weight:700">'+topSetDisplay+'</td>'+
+          '<td style="font-weight:600">'+r.reps+'</td>'+
+          '<td style="color:var(--fg3);font-size:11px">'+fmtDate(r.date)+'</td>'+
+          '<td><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--fg3)">'+
+            '<span style="width:6px;height:6px;border-radius:50%;background:'+color+';display:inline-block"></span>'+m+
+          '</span></td>'+
+        '</tr>';
+      }).join('')+
+      '</tbody>';
+  } else {
+    // Est. 1RM view: sorted by orm desc
+    const rows = Object.values(rec).sort((a,b)=>b.orm-a.orm).slice(0,12);
+
+    t.innerHTML =
+      '<thead><tr>'+
+        '<th>Exercise</th><th>Est. 1RM (est.)</th><th>Top Set</th><th>Reps</th><th>Muscle</th>'+
+      '</tr></thead>'+
+      '<tbody>'+rows.map(r=>{
+        const m = EX[r.title]?.p||'Other';
+        const color = MCOL[m]||'#888';
+        return '<tr>'+
+          '<td><div class="pr-ex" onclick="openExModal(\''+r.title.replace(/'/g,"\\'")+'\''+')" style="cursor:pointer;"><svg data-lucide="dumbbell"></svg>'+r.title+'</div></td>'+
+          '<td style="color:var(--hi);font-weight:600">'+(r.orm>0?fmtW(r.orm):'—')+'</td>'+
+          '<td>'+(r.wKg>0?fmtW(r.wKg):'BW')+'</td>'+
+          '<td>'+r.reps+'</td>'+
+          '<td><span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--fg3)">'+
+            '<span style="width:6px;height:6px;border-radius:50%;background:'+color+';display:inline-block"></span>'+m+
+          '</span></td>'+
+        '</tr>';
+      }).join('')+
+      '</tbody>';
+  }
   lucide.createIcons();
 }
 
@@ -1628,25 +1718,53 @@ function buildDiffBlock(w, prev) {
                      : fatigue  ? '🔻 FATIGUE · '+(Math.round(volPct*10)/10)+'% volume'
                      : '≈ VOLUME MATCHED · '+(volPct>=0?'+':'')+(Math.round(volPct*10)/10)+'%';
 
-  // per-exercise badges
+  // per-exercise badges based on Top Set
   const prevMap = {};
   (prev.exercises||[]).forEach(ex => {
-    const bestOrm = Math.max(...(ex.sets||[]).filter(s=>s.type!=='warmup').map(s=>epley(s.weight_kg||0,s.reps||0)), 0);
-    prevMap[ex.title] = { orm: bestOrm, topW: Math.max(...(ex.sets||[]).filter(s=>s.type!=='warmup').map(s=>s.weight_kg||0),0) };
+    const ts = getTopSet(ex.sets);
+    if (ts) prevMap[ex.title] = ts;
   });
 
   const badges = (w.exercises||[]).map(ex => {
     const p = prevMap[ex.title];
     if (!p) return '';
-    const curOrm = Math.max(...(ex.sets||[]).filter(s=>s.type!=='warmup').map(s=>epley(s.weight_kg||0,s.reps||0)),0);
-    if (!curOrm || !p.orm) return '';
-    const diff = curOrm - p.orm;
-    const diffPct = p.orm > 0 ? diff / p.orm * 100 : 0;
-    if (Math.abs(diffPct) < 0.5) return '<span class="diff-badge diff-neu"><svg data-lucide="minus"></svg>'+ex.title+'</span>';
-    const cls  = diff > 0 ? 'diff-pos' : 'diff-neg';
-    const icon = diff > 0 ? 'arrow-up' : 'arrow-down';
-    const lbl  = (diff>0?'+':'')+Math.round(diff*2.20462*10)/10+' lbs 1RM';
-    return '<span class="diff-badge '+cls+'"><svg data-lucide="'+icon+'"></svg>'+ex.title+' ('+lbl+')</span>';
+    const cur = getTopSet(ex.sets);
+    if (!cur) return '';
+
+    const curW = cur.weight_kg || 0;
+    const prevW = p.weight_kg || 0;
+    const curR = cur.reps || 0;
+    const prevR = p.reps || 0;
+
+    let diffLbl = '', cls = 'diff-neu', icon = 'minus';
+    if (curW > 0 || prevW > 0) {
+      const wDiffKg = curW - prevW;
+      const wDiffDisp = unit === 'lbs' ? Math.round(toLbs(wDiffKg) * 10) / 10 : Math.round(wDiffKg * 10) / 10;
+      if (Math.abs(wDiffDisp) >= 0.5) {
+        cls = wDiffKg > 0 ? 'diff-pos' : 'diff-neg';
+        icon = wDiffKg > 0 ? 'arrow-up' : 'arrow-down';
+        diffLbl = (wDiffKg > 0 ? '+' : '') + wDiffDisp + ' ' + unit + ' top set';
+      } else if (curR !== prevR) {
+        const rDiff = curR - prevR;
+        cls = rDiff > 0 ? 'diff-pos' : 'diff-neg';
+        icon = rDiff > 0 ? 'arrow-up' : 'arrow-down';
+        const weightContext = curW > 0 ? ' @ ' + fmtW(curW) : '';
+        diffLbl = (rDiff > 0 ? '+' : '') + rDiff + ' rep' + (Math.abs(rDiff) === 1 ? '' : 's') + weightContext;
+      } else {
+        diffLbl = 'matched top set';
+      }
+    } else {
+      const rDiff = curR - prevR;
+      if (rDiff !== 0) {
+        cls = rDiff > 0 ? 'diff-pos' : 'diff-neg';
+        icon = rDiff > 0 ? 'arrow-up' : 'arrow-down';
+        diffLbl = (rDiff > 0 ? '+' : '') + rDiff + ' rep' + (Math.abs(rDiff) === 1 ? '' : 's');
+      } else {
+        diffLbl = 'matched reps';
+      }
+    }
+
+    return '<span class="diff-badge '+cls+'"><svg data-lucide="'+icon+'"></svg>'+ex.title+' ('+diffLbl+')</span>';
   }).filter(Boolean).join('');
 
   return '<div class="wk-diff">'+
@@ -1928,8 +2046,8 @@ function buildAIMarkdown() {
         const reps = s.reps || 0;
         volKg += wKg * reps;
         const orm = epley(wKg, reps);
-        if (!prs[ex.title] || orm > prs[ex.title].orm) {
-          prs[ex.title] = { title: ex.title, wKg, reps, orm, date: w.start_time, muscle: m.p };
+        if (!prs[ex.title] || isBetterSet(s, prs[ex.title])) {
+          prs[ex.title] = { title: ex.title, weight_kg: wKg, wKg, reps, orm, date: w.start_time, muscle: m.p };
         }
       });
       const setCount = (ex.sets || []).length;
@@ -1964,7 +2082,7 @@ function buildAIMarkdown() {
   md += '## 🏆 Personal Records & Estimated 1RM (Epley Formula)\n';
   md += '| Exercise | Top Set | Reps | Est. 1RM (lbs) | Est. 1RM (kg) | BW Ratio | Target Muscle | Date Achieved |\n';
   md += '| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n';
-  const sortedPrs = Object.values(prs).sort((a, b) => b.orm - a.orm);
+  const sortedPrs = Object.values(prs).sort((a, b) => (b.wKg !== a.wKg ? b.wKg - a.wKg : b.reps - a.reps));
   sortedPrs.forEach(p => {
     const topSetLbs = p.wKg > 0 ? Math.round(toLbs(p.wKg)) + ' lbs' : 'Bodyweight';
     const ormLbs = p.orm > 0 ? Math.round(toLbs(p.orm)) + ' lbs' : '—';
@@ -2046,8 +2164,8 @@ function buildJSONExport() {
         const reps = s.reps || 0;
         volKg += wKg * reps;
         const orm = epley(wKg, reps);
-        if (!prs[ex.title] || orm > prs[ex.title].orm) {
-          prs[ex.title] = { title: ex.title, weight_kg: wKg, weight_lbs: Math.round(toLbs(wKg)), reps, est_1rm_kg: Math.round(orm), est_1rm_lbs: Math.round(toLbs(orm)), date: w.start_time, muscle: m.p };
+        if (!prs[ex.title] || isBetterSet(s, prs[ex.title])) {
+          prs[ex.title] = { title: ex.title, weight_kg: wKg, wKg, weight_lbs: Math.round(toLbs(wKg)), reps, est_1rm_kg: Math.round(orm), est_1rm_lbs: Math.round(toLbs(orm)), date: w.start_time, muscle: m.p };
         }
       });
       const setCount = (ex.sets || []).length;
@@ -2076,7 +2194,7 @@ function buildJSONExport() {
       current_bodyweight_lbs: Math.round(toLbs(bwKg) * 10) / 10,
       current_bodyweight_kg: bwKg
     },
-    personal_records: Object.values(prs).sort((a, b) => b.est_1rm_kg - a.est_1rm_kg),
+    personal_records: Object.values(prs).sort((a, b) => ((b.weight_kg !== a.weight_kg ? b.weight_kg - a.weight_kg : b.reps - a.reps))),
     muscle_volume_distribution: muscleVol,
     body_measurements: bw,
     workouts: workouts
@@ -2184,10 +2302,9 @@ function computeExerciseTimeline(exName) {
       if (ex.title !== exName) return;
       const normalSets = (ex.sets||[]).filter(s=>s.type!=='warmup');
       if (!normalSets.length) return;
-      const bestSet = normalSets.reduce((best,s) => {
-        const orm = epley(s.weight_kg||0, s.reps||0);
-        return orm > best.orm ? {wKg:s.weight_kg||0, reps:s.reps||0, orm} : best;
-      }, {wKg:0, reps:0, orm:0});
+      const topSet = getTopSet(normalSets) || normalSets[0];
+      const orm = epley(topSet.weight_kg||0, topSet.reps||0);
+      const bestSet = { wKg: topSet.weight_kg||0, reps: topSet.reps||0, orm };
       const allSetsStr = normalSets.map(s=>s.reps+'×'+fmtW(s.weight_kg)).join(', ');
       timeline.push({ date: w.start_time, wId: w.id, ...bestSet, allSetsStr });
     });
@@ -2196,19 +2313,34 @@ function computeExerciseTimeline(exName) {
 }
 
 function computeProgressionVelocity() {
-  // returns array of {name, firstOrm, latestOrm, deltaPercent, status} for all exercises with >=2 data points
+  // returns array of {name, firstW, latestW, firstReps, latestReps, delta, status, sessions} for all exercises with >=2 data points
   const exNames = new Set();
   workouts.forEach(w => (w.exercises||[]).forEach(ex => exNames.add(ex.title)));
   const results = [];
   exNames.forEach(name => {
     const tl = computeExerciseTimeline(name);
     if (tl.length < 2) return;
-    const firstOrm  = tl[0].orm;
-    const latestOrm = tl[tl.length-1].orm;
-    if (!firstOrm) return;
-    const delta = ((latestOrm - firstOrm) / firstOrm) * 100;
+    const first  = tl[0];
+    const latest = tl[tl.length-1];
+    let delta = 0;
+    if (latest.wKg > 0 || first.wKg > 0) {
+      if (first.wKg > 0) {
+        delta = ((latest.wKg - first.wKg) / first.wKg) * 100;
+      } else {
+        delta = 100;
+      }
+    } else {
+      if (first.reps > 0) {
+        delta = ((latest.reps - first.reps) / first.reps) * 100;
+      }
+    }
     const status = delta >= 15 ? 'hot' : delta >= 5 ? 'up' : delta >= -2 ? 'flat' : 'plat';
-    results.push({ name, firstOrm, latestOrm, delta, status, sessions: tl.length });
+    results.push({
+      name,
+      firstW: first.wKg, latestW: latest.wKg,
+      firstReps: first.reps, latestReps: latest.reps,
+      delta, status, sessions: tl.length
+    });
   });
   return results.sort((a,b) => b.delta - a.delta);
 }
@@ -2259,17 +2391,18 @@ function renderProgChart() {
   const candidates = Object.entries(exFreq).filter(([,c])=>c>=threshold).map(([n])=>n);
   let anchorName = candidates[0] || null;
   // prefer known compounds
-  const compounds = ['Bench Press (Barbell)','Bench Press (Smith Machine)','Squat (Smith Machine)','Pull Up',
+  const compounds = ['Squat (Barbell)','Bench Press (Barbell)','Bench Press (Smith Machine)','Squat (Smith Machine)','Pull Up',
                      'Romanian Deadlift (Barbell)','Incline Bench Press (Smith Machine)'];
   for (const c of compounds) { if (candidates.includes(c)) { anchorName = c; break; } }
 
   const anchorData = anchorName ? filtered.map(w => {
-    let best = 0;
+    let bestW = 0;
     (w.exercises||[]).forEach(ex => {
       if (ex.title !== anchorName) return;
-      (ex.sets||[]).filter(s=>s.type!=='warmup').forEach(s => { const o = epley(s.weight_kg||0,s.reps||0); if(o>best) best=o; });
+      const ts = getTopSet(ex.sets);
+      if (ts && (ts.weight_kg||0) > bestW) bestW = ts.weight_kg;
     });
-    return best > 0 ? (unit==='lbs'?Math.round(toLbs(best)):Math.round(best)) : null;
+    return bestW > 0 ? (unit==='lbs'?Math.round(toLbs(bestW)):Math.round(bestW*10)/10) : null;
   }) : null;
 
   dC('prog');
@@ -2288,7 +2421,7 @@ function renderProgChart() {
   ];
   if (anchorData && anchorData.some(v=>v!==null)) {
     datasets.push({
-      type:'line', label: (anchorName||'Anchor')+' est. 1RM',
+      type:'line', label: (anchorName||'Anchor')+' Top Set ('+unit+')',
       data: anchorData, borderColor:'#34d399', backgroundColor:'transparent',
       borderWidth: 2, pointRadius: 3, tension:.3, yAxisID:'y1', spanGaps: true
     });
@@ -2377,9 +2510,16 @@ function renderGainers() {
     const deltaStr= (e.delta>=0?'+':'')+Math.round(e.delta*10)/10+'%';
     const barPct  = Math.min(100, Math.round(Math.abs(e.delta)/maxDelta*100));
     const fillColor= e.delta>=15?'var(--hi2)':e.delta>=5?'var(--hi3)':e.delta>=-2?'var(--fg3)':'var(--hi5)';
-    const diffKg = e.latestOrm - e.firstOrm;
-    const diffDisp = unit === 'lbs' ? Math.round(toLbs(diffKg)) : Math.round(diffKg * 10) / 10;
-    const diffUnitStr = (diffDisp >= 0 ? '+' : '') + diffDisp + ' ' + unit;
+    let summaryStr = '';
+    if (e.latestW > 0 || e.firstW > 0) {
+      const diffKg = e.latestW - e.firstW;
+      const diffDisp = unit === 'lbs' ? Math.round(toLbs(diffKg)) : Math.round(diffKg * 10) / 10;
+      const diffUnitStr = (diffDisp >= 0 ? '+' : '') + diffDisp + ' ' + unit;
+      summaryStr = fmtW(e.firstW) + ' (' + e.firstReps + 'r) → ' + fmtW(e.latestW) + ' (' + e.latestReps + 'r) · ' + diffUnitStr;
+    } else {
+      const rDiff = e.latestReps - e.firstReps;
+      summaryStr = e.firstReps + 'r → ' + e.latestReps + 'r · ' + (rDiff >= 0 ? '+' : '') + rDiff + ' reps';
+    }
 
     const el = document.createElement('div');
     el.className = 'gn-item';
@@ -2392,7 +2532,7 @@ function renderGainers() {
       '</div>'+
       '<div class="gn-bar"><div class="gn-fill" style="width:0%;background:'+fillColor+'"></div></div>'+
       '<div style="font-size:10px;color:var(--fg3);display:flex;justify-content:space-between;gap:8px;">'+
-        '<span>'+fmtW(e.firstOrm)+' → '+fmtW(e.latestOrm)+' ('+diffUnitStr+')</span>'+
+        '<span>'+summaryStr+'</span>'+
         '<span>'+e.sessions+' sessions</span>'+
       '</div>';
     el.style.cursor = 'pointer';
@@ -2432,9 +2572,21 @@ function openExModal(exName) {
   const statsEl = document.getElementById('m-ex-stats');
   if (statsEl && timeline.length) {
     const first = timeline[0], last = timeline[timeline.length-1];
-    const pct = first.orm > 0 ? Math.round(((last.orm-first.orm)/first.orm)*100) : 0;
-    statsEl.textContent = timeline.length+' sessions · '+(pct>=0?'+':'')+pct+'% 1RM growth';
-    statsEl.style.color = pct >= 0 ? 'var(--hi2)' : 'var(--hi5)';
+    let statText = timeline.length + ' sessions';
+    if (last.wKg > 0 || first.wKg > 0) {
+      const diffKg = last.wKg - first.wKg;
+      const pct = first.wKg > 0 ? Math.round((diffKg / first.wKg) * 100) : 0;
+      const diffDisp = unit === 'lbs' ? Math.round(toLbs(diffKg)) : Math.round(diffKg * 10) / 10;
+      const sign = diffDisp >= 0 ? '+' : '';
+      statText += ' · ' + sign + diffDisp + ' ' + unit + ' top set (' + (pct >= 0 ? '+' : '') + pct + '%)';
+      statsEl.style.color = diffKg >= 0 ? 'var(--hi2)' : 'var(--hi5)';
+    } else {
+      const rDiff = last.reps - first.reps;
+      const pct = first.reps > 0 ? Math.round((rDiff / first.reps) * 100) : 0;
+      statText += ' · ' + (rDiff >= 0 ? '+' : '') + rDiff + ' reps (' + (pct >= 0 ? '+' : '') + pct + '%)';
+      statsEl.style.color = rDiff >= 0 ? 'var(--hi2)' : 'var(--hi5)';
+    }
+    statsEl.textContent = statText;
   } else if (statsEl) { statsEl.textContent = ''; }
 
   // chart
@@ -2442,24 +2594,21 @@ function openExModal(exName) {
   if (timeline.length >= 2) {
     const {fg2,grid,dark} = gC();
     const labels = timeline.map(t=>fmtDate(t.date));
-    const ormData = timeline.map(t=>unit==='lbs'?Math.round(toLbs(t.orm)):Math.round(t.orm));
     const wData   = timeline.map(t=>unit==='lbs'?Math.round(toLbs(t.wKg)):Math.round(t.wKg));
     const ctx = document.getElementById('ch-ex-prog').getContext('2d');
     const g = ctx.createLinearGradient(0,0,0,200);
-    g.addColorStop(0,'rgba(167,139,250,.22)'); g.addColorStop(1,'rgba(167,139,250,0)');
+    g.addColorStop(0,'rgba(52,211,153,.22)'); g.addColorStop(1,'rgba(52,211,153,0)');
     CH['ex-prog'] = new Chart(ctx, {
       type:'line',
       data:{ labels, datasets:[
-        { label:'Est. 1RM', data:ormData, borderColor:'#a78bfa', backgroundColor:g, borderWidth:2, fill:true, tension:.35, pointRadius:4, yAxisID:'y' },
-        { label:'Top Set',  data:wData,   borderColor:'#34d399', backgroundColor:'transparent', borderWidth:1.5, tension:.3, pointRadius:3, yAxisID:'y1' }
+        { label:'Top Set ('+unit+')', data:wData, borderColor:'#34d399', backgroundColor:g, borderWidth:2.5, fill:true, tension:.35, pointRadius:4, yAxisID:'y' }
       ]},
       options:{
         responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{ display:true, position:'top', align:'end', labels:{ boxWidth:8, usePointStyle:true, pointStyleWidth:8, font:{size:10,family:"'Chivo Mono', monospace"} }} },
         scales:{
           x:{ grid:{display:false}, border:{display:false}, ticks:{font:{size:10},maxTicksLimit:12} },
-          y:{ grid:{color:grid}, border:{display:false}, ticks:{callback:v=>fmtW(v,'kg').replace(' kg',''),font:{size:10}}, position:'left' },
-          y1:{ grid:{display:false}, border:{display:false}, ticks:{callback:v=>fmtW(v,'kg').replace(' kg',''),font:{size:10}}, position:'right' }
+          y:{ grid:{color:grid}, border:{display:false}, ticks:{callback:v=>v+' '+unit,font:{size:10}}, position:'left' }
         }
       }
     });
@@ -2473,15 +2622,40 @@ function openExModal(exName) {
   }
   [...timeline].reverse().forEach((t, i) => {
     const prev = i < timeline.length-1 ? timeline[timeline.length-2-i] : null;
-    const delta = prev ? t.orm - prev.orm : 0;
-    const deltaCls = i===timeline.length-1?'first':delta>0?'pos':delta<0?'neg':'first';
-    const deltaStr = i===timeline.length-1?'first':((delta>=0?'+':'')+Math.round(delta*2.20462*10)/10+' lbs');
+    let deltaStr = 'first', deltaCls = 'first';
+    if (prev) {
+      if (t.wKg > 0 || prev.wKg > 0) {
+        const diffKg = t.wKg - prev.wKg;
+        const diffDisp = unit === 'lbs' ? Math.round(toLbs(diffKg)) : Math.round(diffKg * 10) / 10;
+        if (Math.abs(diffDisp) >= 0.5) {
+          deltaCls = diffKg > 0 ? 'pos' : 'neg';
+          deltaStr = (diffKg > 0 ? '+' : '') + diffDisp + ' ' + unit;
+        } else if (t.reps !== prev.reps) {
+          const rDiff = t.reps - prev.reps;
+          deltaCls = rDiff > 0 ? 'pos' : 'neg';
+          deltaStr = (rDiff > 0 ? '+' : '') + rDiff + ' reps';
+        } else {
+          deltaStr = 'matched';
+          deltaCls = 'first';
+        }
+      } else {
+        const rDiff = t.reps - prev.reps;
+        if (rDiff !== 0) {
+          deltaCls = rDiff > 0 ? 'pos' : 'neg';
+          deltaStr = (rDiff > 0 ? '+' : '') + rDiff + ' reps';
+        } else {
+          deltaStr = 'matched';
+          deltaCls = 'first';
+        }
+      }
+    }
+    const topSetDisplay = t.wKg > 0 ? fmtW(t.wKg) + ' × ' + t.reps : t.reps + ' reps (BW)';
     const el = document.createElement('div');
     el.className = 'ex-hist-item';
     el.innerHTML =
       '<span class="ex-hist-date">'+fmtDate(t.date)+'</span>'+
       '<span class="ex-hist-sets">'+t.allSetsStr+'</span>'+
-      '<span class="ex-hist-orm">'+fmtW(t.orm)+'</span>'+
+      '<span class="ex-hist-orm" style="color:var(--hi2)">'+topSetDisplay+'</span>'+
       '<span class="ex-hist-delta '+deltaCls+'">'+deltaStr+'</span>';
     hist.appendChild(el);
   });
@@ -2505,6 +2679,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   lucide.createIcons();
   document.getElementById('u-'+unit).classList.add('on');
   setSplitMode(splitMode);
+  setPrView(prView);
   await checkVercelConfig();
   document.getElementById('m-key').value = apiKey;
   loadData();
